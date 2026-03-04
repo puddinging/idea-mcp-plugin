@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>com.pudding.mcp</id>
+    <name>MCP Server</name>
+    <vendor>jiefeng.wang</vendor>
+    <description>IntelliJ IDEA PSI capabilities exposed via MCP protocol</description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>Git4Idea</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService
+                serviceImplementation="com.pudding.mcp.McpPluginSettings"/>
+        <postStartupActivity
+                implementation="com.pudding.mcp.McpPluginStartupActivity"/>
+        <applicationConfigurable
+                instance="com.pudding.mcp.McpPluginConfigurable"
+                displayName="MCP Server"
+                id="com.pudding.mcp.settings"/>
+    </extensions>
+</idea-plugin>

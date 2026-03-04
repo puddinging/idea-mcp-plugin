@@ -1,0 +1,20 @@
+# Build
+build/
+out/
+
+# Gradle
+.gradle/
+
+# IDE
+.idea/
+*.iml
+
+# IntelliJ Platform SDK
+.intellijPlatform/
+
+# Local config
+.mcp.json
+.claude/
+
+# Plan doc
+IDEA-MCP-PLUGIN-PLAN.md
