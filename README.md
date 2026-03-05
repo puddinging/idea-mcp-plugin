@@ -65,7 +65,7 @@ src/main/
 ./gradlew build
 ```
 
-产物位于 `build/distributions/idea-mcp-plugin-0.0.1.zip`。
+产物位于 `build/distributions/idea-mcp-plugin-0.0.2.zip`。
 
 ### 5. 安装
 
