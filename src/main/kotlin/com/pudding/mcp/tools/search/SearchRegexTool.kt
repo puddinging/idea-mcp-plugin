@@ -41,21 +41,21 @@ class SearchRegexTool : McpTool {
 
         runReadAction {
             ProjectFileIndex.getInstance(project).iterateContent { vf ->
-                if (!vf.isDirectory && count < limit) {
+                if (!vf.isDirectory && count < limit && !vf.fileType.isBinary) {
                     try {
                         val content = vf.contentsToByteArray().toString(Charsets.UTF_8)
-                        content.lines().forEachIndexed { idx, line ->
-                            if (count < limit) {
-                                val match = regex.find(line)
-                                if (match != null) {
-                                    results.add(JsonObject().apply {
-                                        addProperty("path", PsiUtils.relativePath(project, vf))
-                                        addProperty("line", idx + 1)
-                                        addProperty("column", match.range.first + 1)
-                                        addProperty("preview", line.trim())
-                                    })
-                                    count++
-                                }
+                        val lines = content.lines()
+                        for ((idx, line) in lines.withIndex()) {
+                            if (count >= limit) break
+                            val match = regex.find(line)
+                            if (match != null) {
+                                results.add(JsonObject().apply {
+                                    addProperty("path", PsiUtils.relativePath(project, vf))
+                                    addProperty("line", idx + 1)
+                                    addProperty("column", match.range.first + 1)
+                                    addProperty("preview", line.trim())
+                                })
+                                count++
                             }
                         }
                     } catch (_: Exception) {}

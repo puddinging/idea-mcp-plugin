@@ -66,8 +66,9 @@ class FindUsagesTool : McpTool {
                 val refFile = refElement.containingFile?.virtualFile ?: return@forEach
                 val refDoc = PsiDocumentManager.getInstance(project).getDocument(refElement.containingFile)
                     ?: return@forEach
-                val refLine = refDoc.getLineNumber(refElement.textOffset) + 1
-                val refCol = refElement.textOffset - refDoc.getLineStartOffset(refLine - 1) + 1
+                val refOffset = refElement.textOffset.coerceIn(0, refDoc.textLength)
+                val refLine = refDoc.getLineNumber(refOffset) + 1
+                val refCol = refOffset - refDoc.getLineStartOffset(refLine - 1) + 1
 
                 // Determine usage type
                 val usageType = resolveUsageType(ref)

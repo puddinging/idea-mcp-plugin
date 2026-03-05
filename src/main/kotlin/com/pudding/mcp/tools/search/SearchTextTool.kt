@@ -9,6 +9,7 @@ import com.pudding.mcp.util.SchemaUtils.string
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectFileIndex
 
@@ -33,11 +34,13 @@ class SearchTextTool : McpTool {
 
         runReadAction {
             ProjectFileIndex.getInstance(project).iterateContent { vf ->
-                if (!vf.isDirectory && count < limit) {
+                if (!vf.isDirectory && count < limit && !vf.fileType.isBinary) {
                     try {
                         val content = vf.contentsToByteArray().toString(Charsets.UTF_8)
-                        content.lines().forEachIndexed { idx, line ->
-                            if (count < limit && line.contains(q, ignoreCase = true)) {
+                        val lines = content.lines()
+                        for ((idx, line) in lines.withIndex()) {
+                            if (count >= limit) break
+                            if (line.contains(q, ignoreCase = true)) {
                                 results.add(JsonObject().apply {
                                     addProperty("path", PsiUtils.relativePath(project, vf))
                                     addProperty("line", idx + 1)

@@ -8,15 +8,15 @@ import com.pudding.mcp.util.SchemaUtils.intOrDefault
 import com.pudding.mcp.util.SchemaUtils.result
 import com.pudding.mcp.util.SchemaUtils.string
 import com.google.gson.JsonObject
-import com.intellij.codeInspection.*
-import com.intellij.codeInspection.ex.InspectionToolRegistrar
+import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerEx
+import com.intellij.codeInsight.daemon.impl.HighlightInfo
+import com.intellij.codeInsight.intention.IntentionAction
+import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.psi.PsiElement
-import com.intellij.psi.PsiElementVisitor
-import com.intellij.psi.PsiRecursiveElementVisitor
 
 class ApplyQuickFixTool : McpTool {
     override val name = "apply_quick_fix"
@@ -59,71 +59,62 @@ class ApplyQuickFixTool : McpTool {
                     errorMsg = "Cannot get document"
                     return@runReadAction
                 }
-                val manager = InspectionManager.getInstance(project)
 
-                // Collect all problems at the target line
-                val problemsAtLine = mutableListOf<Pair<ProblemDescriptor, LocalInspectionTool>>()
+                val targetOffset = PsiUtils.lineColumnToOffset(document, line, column)
 
-                InspectionToolRegistrar.getInstance().createTools()
-                    .mapNotNull { it.tool as? LocalInspectionTool }
-                    .forEach { tool ->
-                        try {
-                            val holder = ProblemsHolder(manager, psiFile, false)
-                            val visitor: PsiElementVisitor = tool.buildVisitor(holder, false)
-                            psiFile.accept(object : PsiRecursiveElementVisitor() {
-                                override fun visitElement(element: PsiElement) {
-                                    element.accept(visitor)
-                                    super.visitElement(element)
-                                }
-                            })
-                            for (pd in holder.results) {
-                                val pdElement = pd.psiElement ?: continue
-                                val pdLine = document.getLineNumber(pdElement.textOffset) + 1
-                                if (pdLine == line && pd.fixes?.isNotEmpty() == true) {
-                                    problemsAtLine.add(pd to tool)
-                                }
-                            }
-                        } catch (_: Exception) {
-                        }
+                // Collect highlights with fixes at the target line from cached analysis
+                val candidates = mutableListOf<Pair<HighlightInfo, List<IntentionAction>>>()
+
+                DaemonCodeAnalyzerEx.processHighlights(
+                    document, project, null, 0, document.textLength
+                ) { info ->
+                    if (info.severity < HighlightSeverity.WARNING) return@processHighlights true
+                    val infoLine = document.getLineNumber(info.startOffset) + 1
+                    if (infoLine != line) return@processHighlights true
+
+                    val fixes = mutableListOf<IntentionAction>()
+                    info.findRegisteredQuickFix<Any?> { desc, _ ->
+                        fixes.add(desc.action)
+                        null
                     }
+                    if (fixes.isNotEmpty()) {
+                        candidates.add(info to fixes)
+                    }
+                    true
+                }
 
-                if (problemsAtLine.isEmpty()) {
+                if (candidates.isEmpty()) {
                     errorMsg = "No fixable problems found at line $line"
                     return@runReadAction
                 }
 
-                // Find the fix closest to the column
-                val bestProblem = problemsAtLine.minByOrNull { pd ->
-                    val pdOff = pd.first.psiElement?.textOffset ?: 0
-                    val pdCol = pdOff - document.getLineStartOffset(line - 1) + 1
-                    kotlin.math.abs(pdCol - column)
-                }
+                // Pick the highlight closest to the target column
+                val best = candidates.minByOrNull { (info, _) ->
+                    kotlin.math.abs(info.startOffset - targetOffset)
+                }!!
 
-                if (bestProblem == null) {
-                    errorMsg = "No fixable problems at position"
-                    return@runReadAction
-                }
-
-                val fixes = bestProblem.first.fixes ?: run {
-                    errorMsg = "No fixes available"
-                    return@runReadAction
-                }
-
+                val fixes = best.second
                 if (fixIndex >= fixes.size) {
                     errorMsg = "Fix index $fixIndex out of bounds (${fixes.size} fixes available)"
                     return@runReadAction
                 }
 
                 val fix = fixes[fixIndex]
-                fixName = fix.name
+                fixName = fix.text
 
-                WriteCommandAction.runWriteCommandAction(project) {
-                    try {
-                        fix.applyFix(project, bestProblem.first)
-                        success = true
-                    } catch (e: Exception) {
-                        errorMsg = e.message ?: "Fix failed"
+                // Create a temporary editor for the fix to operate on
+                val editor = EditorFactory.getInstance().createEditor(document, project)
+                try {
+                    WriteCommandAction.runWriteCommandAction(project) {
+                        try {
+                            fix.invoke(project, editor, psiFile)
+                            success = true
+                        } catch (e: Exception) {
+                            errorMsg = e.message ?: "Fix failed"
+                        }
                     }
+                } finally {
+                    EditorFactory.getInstance().releaseEditor(editor)
                 }
             }
         }

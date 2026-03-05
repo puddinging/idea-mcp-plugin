@@ -4,7 +4,7 @@ IntelliJ IDEA 插件，通过 [Model Context Protocol (MCP)](https://modelcontex
 
 ## 功能概览
 
-提供 40+ 个工具，覆盖 IDE 核心能力：
+提供 40 个工具，覆盖 IDE 核心能力：
 
 | 分类 | 工具 |
 |------|------|
@@ -21,14 +21,14 @@ IntelliJ IDEA 插件，通过 [Model Context Protocol (MCP)](https://modelcontex
 
 ## 兼容性
 
-- IntelliJ IDEA 2023.3+（含 EAP 版本）
+- IntelliJ IDEA 2025.1+（含 EAP 版本）
 - 需要 Java 插件和 Git4Idea 插件
 
 ## 从零构建
 
 ### 1. 环境准备
 
-- JDK 17+
+- JDK 17+（工具链目标 21）
 - IntelliJ IDEA（任意版本，用于开发和测试）
 
 ### 2. 克隆项目
@@ -50,9 +50,10 @@ src/main/
 │   ├── McpPluginStartupActivity.kt   # IDE 启动时注册工具
 │   ├── server/
 │   │   ├── McpSseServer.kt           # HTTP 服务器（SSE + JSON-RPC）
+│   │   ├── McpSocketServer.kt        # TCP Socket 服务器（Stdio 模式后端）
 │   │   ├── McpProtocolHandler.kt     # MCP 协议处理
 │   │   └── ToolRegistry.kt           # 工具注册中心
-│   ├── tools/                        # 40+ 工具实现（按分类组织）
+│   ├── tools/                        # 40 个工具实现（按分类组织）
 │   └── util/                         # PSI 和 Schema 工具类
 └── resources/META-INF/
     └── plugin.xml                    # 插件声明
@@ -64,7 +65,7 @@ src/main/
 ./gradlew build
 ```
 
-产物位于 `build/distributions/idea-mcp-plugin-1.0.0.zip`。
+产物位于 `build/distributions/idea-mcp-plugin-0.0.1.zip`。
 
 ### 5. 安装
 
@@ -72,7 +73,7 @@ IDEA → Settings → Plugins → 齿轮图标 → **Install Plugin from Disk...
 
 ### 6. 启用
 
-Settings → **MCP Server** → 勾选 **Enable MCP Server** → 服务即时启动。
+Settings → **MCP Server** → 勾选 **Enable MCP Server** → 服务即时启动（SSE 和 Socket 服务同时启动）。
 
 ## 连接 AI 助手
 
@@ -99,7 +100,7 @@ Settings → **MCP Server** → 勾选 **Enable MCP Server** → 服务即时启
   "mcpServers": {
     "intellij-idea-mcp": {
       "type": "stdio",
-      "env": { "MCP_SERVER_PORT": "19999" },
+      "env": { "MCP_SOCKET_PORT": "19998" },
       "command": "<jbr-java-path>",
       "args": ["-classpath", "<plugin-jars>", "com.pudding.mcp.stdio.McpStdioRunner"]
     }
@@ -107,21 +108,29 @@ Settings → **MCP Server** → 勾选 **Enable MCP Server** → 服务即时启
 }
 ```
 
-> Stdio 模式下，AI 助手以子进程方式启动 `McpStdioRunner`，通过 stdin/stdout 传输 JSON-RPC 消息，由 Runner 转发至插件内置的 HTTP 服务。
+> Stdio 模式下，AI 助手以子进程方式启动 `McpStdioRunner`，通过 stdin/stdout 传输 JSON-RPC 消息，由 Runner 经 TCP 转发至插件内置的 Socket 服务（端口 19998）。
 
 ## 架构
 
 ```
 AI 助手 ──SSE──→ McpSseServer (:19999) ──→ McpProtocolHandler ──→ Tool.execute()
                                                                        ↓
-AI 助手 ──Stdio──→ McpStdioRunner ──HTTP──→ McpSseServer (/message)   IDE PSI/API
+AI 助手 ──Stdio──→ McpStdioRunner ──TCP──→ McpSocketServer (:19998)  IDE PSI/API
 ```
+
+- **SSE 模式**：客户端通过 `/sse` 建立长连接，通过 `/message` 发送 JSON-RPC 请求，响应通过 SSE 流返回。
+- **Stdio 模式**：`McpStdioRunner`（纯 Java，无 IntelliJ 依赖）作为子进程运行，从 stdin 读取 JSON-RPC 消息，通过 TCP 转发至 `McpSocketServer`，响应写回 stdout。
+
+两种模式最终都通过 `McpProtocolHandler` 分发到 `ToolRegistry` 中注册的工具执行。
 
 ## 开发调试
 
 ```bash
 # 沙箱模式运行（启动带插件的 IDE 实例）
 ./gradlew runIde
+
+# 指定沙箱中打开的项目
+./gradlew runIde -PtestProject=/path/to/project
 
 # 仅构建不运行
 ./gradlew build

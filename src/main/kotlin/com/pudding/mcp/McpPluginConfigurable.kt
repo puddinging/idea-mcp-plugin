@@ -4,6 +4,7 @@ import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.options.Configurable
+import com.pudding.mcp.server.McpSocketServer
 import com.pudding.mcp.server.McpSseServer
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -32,11 +33,14 @@ class McpPluginConfigurable : Configurable {
             enabledCheckbox!!.isEnabled = false
             McpPluginSettings.instance.state.enabled = enabled
             ApplicationManager.getApplication().executeOnPooledThread {
-                val server = McpSseServer.getInstance()
+                val sseServer = McpSseServer.getInstance()
+                val socketServer = McpSocketServer.getInstance()
                 if (enabled) {
-                    if (!server.isRunning()) server.start(port = 19999)
+                    if (!sseServer.isRunning()) sseServer.start(port = 19999)
+                    if (!socketServer.isRunning()) socketServer.start(project = null)
                 } else {
-                    if (server.isRunning()) server.stop()
+                    if (sseServer.isRunning()) sseServer.stop()
+                    if (socketServer.isRunning()) socketServer.stop()
                 }
                 SwingUtilities.invokeLater {
                     enabledCheckbox!!.isEnabled = true
@@ -79,8 +83,13 @@ class McpPluginConfigurable : Configurable {
     }
 
     private fun updateStatusLabel() {
-        val running = McpSseServer.getInstance().isRunning()
-        statusLabel?.text = if (running) "Status: Running" else "Status: Stopped"
+        val sseRunning = McpSseServer.getInstance().isRunning()
+        val socketRunning = McpSocketServer.getInstance().isRunning()
+        statusLabel?.text = when {
+            sseRunning && socketRunning -> "Status: Running"
+            sseRunning || socketRunning -> "Status: Partially Running"
+            else -> "Status: Stopped"
+        }
     }
 
     private fun copyToClipboard(text: String) {
@@ -106,7 +115,7 @@ class McpPluginConfigurable : Configurable {
   "mcpServers": {
     "intellij-idea-mcp": {
       "type": "stdio",
-      "env": { "MCP_SERVER_PORT": "19999" },
+      "env": { "MCP_SOCKET_PORT": "19998" },
       "command": "$javaPath",
       "args": ["-classpath", "$classpath", "com.pudding.mcp.stdio.McpStdioRunner"]
     }

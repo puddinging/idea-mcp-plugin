@@ -43,23 +43,25 @@ class SearchInFilesByRegexTool : McpTool {
         }
 
         val searchIn = if (directory != null) "$basePath/$directory" else basePath
+        val maskRegex = fileMask?.let { compileMask(it) }
         val entries = JsonArray()
         var hasMore = false
         var totalCount = 0
 
         runReadAction {
             ProjectFileIndex.getInstance(project).iterateContent { vf ->
-                if (!vf.isDirectory && vf.path.startsWith(searchIn)) {
-                    if (fileMask == null || matchesMask(vf.name, fileMask)) {
+                if (!vf.isDirectory && vf.path.startsWith(searchIn) && !vf.fileType.isBinary) {
+                    if (maskRegex == null || vf.name.matches(maskRegex)) {
                         val content = try {
                             vf.contentsToByteArray().toString(Charsets.UTF_8)
                         } catch (_: Exception) { return@iterateContent true }
 
-                        content.lines().forEachIndexed { idx, line ->
-                            if (totalCount >= maxCount) { hasMore = true; return@forEachIndexed }
+                        val lines = content.lines()
+                        for ((idx, line) in lines.withIndex()) {
+                            if (totalCount >= maxCount) { hasMore = true; break }
                             val match = regex.find(line)
                             if (match != null) {
-                                val marked = regex.find(line)?.let { m -> line.replaceRange(m.range, "||${m.value}||") } ?: line
+                                val marked = line.replaceRange(match.range, "||${match.value}||")
                                 entries.add(JsonObject().apply {
                                     addProperty("filePath", PsiUtils.relativePath(project, vf))
                                     addProperty("lineNumber", idx + 1)
@@ -80,8 +82,8 @@ class SearchInFilesByRegexTool : McpTool {
         }
     }
 
-    private fun matchesMask(fileName: String, mask: String): Boolean {
-        val regex = mask.replace(".", "\\.").replace("*", ".*").replace("?", ".")
-        return fileName.matches(Regex(regex))
+    private fun compileMask(mask: String): Regex {
+        val pattern = mask.replace(".", "\\.").replace("*", ".*").replace("?", ".")
+        return Regex(pattern)
     }
 }

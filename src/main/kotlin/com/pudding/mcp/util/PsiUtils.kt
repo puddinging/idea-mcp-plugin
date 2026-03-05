@@ -25,7 +25,9 @@ object PsiUtils {
     fun lineColumnToOffset(document: Document, line: Int, column: Int): Int {
         val lineIndex = (line - 1).coerceAtLeast(0)
         if (lineIndex >= document.lineCount) return document.textLength
-        return document.getLineStartOffset(lineIndex) + (column - 1).coerceAtLeast(0)
+        val lineStart = document.getLineStartOffset(lineIndex)
+        val lineEnd = document.getLineEndOffset(lineIndex)
+        return (lineStart + (column - 1).coerceAtLeast(0)).coerceAtMost(lineEnd)
     }
 
     fun getDocument(project: Project, psiFile: PsiFile): Document? {

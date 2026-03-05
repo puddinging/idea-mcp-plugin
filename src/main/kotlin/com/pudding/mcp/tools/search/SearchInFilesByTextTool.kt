@@ -12,7 +12,6 @@ import com.google.gson.JsonObject
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectFileIndex
-import com.intellij.openapi.vfs.VirtualFile
 
 class SearchInFilesByTextTool : McpTool {
     override val name = "search_in_files_by_text"
@@ -38,6 +37,7 @@ class SearchInFilesByTextTool : McpTool {
 
         val basePath = project.basePath ?: return error("Project base path not found")
         val searchIn = if (directory != null) "$basePath/$directory" else basePath
+        val maskRegex = fileMask?.let { compileMask(it) }
 
         val entries = JsonArray()
         var hasMore = false
@@ -45,15 +45,15 @@ class SearchInFilesByTextTool : McpTool {
 
         runReadAction {
             ProjectFileIndex.getInstance(project).iterateContent { vf ->
-                if (!vf.isDirectory && vf.path.startsWith(searchIn)) {
-                    if (fileMask == null || matchesMask(vf.name, fileMask)) {
+                if (!vf.isDirectory && vf.path.startsWith(searchIn) && !vf.fileType.isBinary) {
+                    if (maskRegex == null || vf.name.matches(maskRegex)) {
                         val content = try {
                             vf.contentsToByteArray().toString(Charsets.UTF_8)
                         } catch (_: Exception) { return@iterateContent true }
 
                         val lines = content.lines()
-                        lines.forEachIndexed { idx, line ->
-                            if (totalCount >= maxCount) { hasMore = true; return@forEachIndexed }
+                        for ((idx, line) in lines.withIndex()) {
+                            if (totalCount >= maxCount) { hasMore = true; break }
                             val found = if (caseSensitive) line.contains(searchText)
                                         else line.contains(searchText, ignoreCase = true)
                             if (found) {
@@ -79,8 +79,8 @@ class SearchInFilesByTextTool : McpTool {
         }
     }
 
-    private fun matchesMask(fileName: String, mask: String): Boolean {
-        val regex = mask.replace(".", "\\.").replace("*", ".*").replace("?", ".")
-        return fileName.matches(Regex(regex))
+    private fun compileMask(mask: String): Regex {
+        val pattern = mask.replace(".", "\\.").replace("*", ".*").replace("?", ".")
+        return Regex(pattern)
     }
 }

@@ -8,15 +8,11 @@ import com.pudding.mcp.util.SchemaUtils.result
 import com.pudding.mcp.util.SchemaUtils.string
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.intellij.codeInspection.InspectionManager
-import com.intellij.codeInspection.LocalInspectionTool
-import com.intellij.codeInspection.ProblemHighlightType
-import com.intellij.codeInspection.ProblemsHolder
+import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerEx
+import com.intellij.lang.annotation.HighlightSeverity
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDocumentManager
-import com.intellij.psi.PsiElementVisitor
-import com.intellij.psi.PsiRecursiveElementVisitor
 
 class GetFileProblemsTool : McpTool {
     override val name = "get_file_problems"
@@ -38,37 +34,35 @@ class GetFileProblemsTool : McpTool {
             val psiFile = PsiUtils.findPsiFile(project, path)
                 ?: return@runReadAction error("File not found: $path")
             val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)
-            val manager = InspectionManager.getInstance(project)
+                ?: return@runReadAction error("Cannot get document for: $path")
+
             val problems = JsonArray()
 
-            com.intellij.codeInspection.ex.InspectionToolRegistrar.getInstance().createTools()
-                .mapNotNull { it.tool as? LocalInspectionTool }
-                .forEach { tool ->
-                    try {
-                        val holder = ProblemsHolder(manager, psiFile, false)
-                        val visitor: PsiElementVisitor = tool.buildVisitor(holder, false)
-                        psiFile.accept(object : PsiRecursiveElementVisitor() {
-                            override fun visitElement(element: com.intellij.psi.PsiElement) {
-                                element.accept(visitor)
-                                super.visitElement(element)
-                            }
-                        })
-                        holder.results.forEach { pd ->
-                            val isError = pd.highlightType == ProblemHighlightType.ERROR ||
-                                          pd.highlightType == ProblemHighlightType.GENERIC_ERROR
-                            if (!errorsOnly || isError) {
-                                val line = if (document != null && pd.psiElement != null)
-                                    document.getLineNumber(pd.psiElement!!.textOffset) + 1 else 0
-                                problems.add(JsonObject().apply {
-                                    addProperty("message", pd.descriptionTemplate)
-                                    addProperty("kind", if (isError) "ERROR" else "WARNING")
-                                    addProperty("file", path)
-                                    addProperty("line", line)
-                                })
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
+            DaemonCodeAnalyzerEx.processHighlights(
+                document, project, null, 0, document.textLength
+            ) { info ->
+                val severity = info.severity
+                val isError = severity >= HighlightSeverity.ERROR
+                val isWarning = severity >= HighlightSeverity.WARNING
+
+                if (errorsOnly && !isError) return@processHighlights true
+                if (!isWarning) return@processHighlights true
+
+                val desc = info.description
+                if (desc.isNullOrBlank()) return@processHighlights true
+
+                val line = document.getLineNumber(info.startOffset) + 1
+                val col = info.startOffset - document.getLineStartOffset(line - 1) + 1
+
+                problems.add(JsonObject().apply {
+                    addProperty("message", desc)
+                    addProperty("kind", if (isError) "ERROR" else "WARNING")
+                    addProperty("file", path)
+                    addProperty("line", line)
+                    addProperty("column", col)
+                })
+                true
+            }
 
             result { add("problems", problems) }
         }

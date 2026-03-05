@@ -56,7 +56,7 @@ class GetImplementationsTool : McpTool {
                     val overDoc = PsiDocumentManager.getInstance(project).getDocument(overrider.containingFile)
                     implementations.add(JsonObject().apply {
                         addProperty("filePath", PsiUtils.relativePath(project, vf))
-                        addProperty("line", if (overDoc != null) overDoc.getLineNumber(overrider.textOffset) + 1 else 0)
+                        addProperty("line", safeLineNumber(overDoc, overrider.textOffset))
                         addProperty("className", overrider.containingClass?.name ?: "")
                         addProperty("methodName", overrider.name)
                     })
@@ -72,7 +72,7 @@ class GetImplementationsTool : McpTool {
                     val inhDoc = PsiDocumentManager.getInstance(project).getDocument(inheritor.containingFile)
                     implementations.add(JsonObject().apply {
                         addProperty("filePath", PsiUtils.relativePath(project, vf))
-                        addProperty("line", if (inhDoc != null) inhDoc.getLineNumber(inheritor.textOffset) + 1 else 0)
+                        addProperty("line", safeLineNumber(inhDoc, inheritor.textOffset))
                         addProperty("className", inheritor.name ?: "")
                         addProperty("methodName", "")
                     })
@@ -82,5 +82,10 @@ class GetImplementationsTool : McpTool {
 
             error("No method or class at position")
         }
+    }
+
+    private fun safeLineNumber(doc: com.intellij.openapi.editor.Document?, offset: Int): Int {
+        if (doc == null || offset < 0 || offset > doc.textLength) return 0
+        return doc.getLineNumber(offset) + 1
     }
 }

@@ -47,35 +47,49 @@ class CallHierarchyTool : McpTool {
         val direction = params.stringOrDefault("direction", "callers")
         val depth = params.intOrDefault("depth", 3).coerceIn(1, 10)
 
-        return runReadAction {
-            val psiFile = PsiUtils.findPsiFile(project, path)
-                ?: return@runReadAction error("File not found: $path")
-            val doc = PsiDocumentManager.getInstance(project).getDocument(psiFile)
-                ?: return@runReadAction error("Cannot get document")
-            val offset = PsiUtils.lineColumnToOffset(doc, line, column)
-            val element = psiFile.findElementAt(offset)
-                ?: return@runReadAction error("No element at position")
-            val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
-                ?: return@runReadAction error("No method at position")
+        return try {
+            runReadAction {
+                val psiFile = PsiUtils.findPsiFile(project, path)
+                    ?: return@runReadAction error("File not found: $path")
+                val doc = PsiDocumentManager.getInstance(project).getDocument(psiFile)
+                    ?: return@runReadAction error("Cannot get document")
+                val offset = PsiUtils.lineColumnToOffset(doc, line, column)
+                val element = psiFile.findElementAt(offset)
+                    ?: return@runReadAction error("No element at position (offset=$offset, textLength=${doc.textLength})")
+                val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java)
+                    ?: return@runReadAction error("No method at position")
 
-            val tree = if (direction == "callees") {
-                buildCalleesTree(project, method, depth, 0)
-            } else {
-                buildCallersTree(project, method, depth, 0)
+                val tree = if (direction == "callees") {
+                    buildCalleesTree(project, method, depth, 0)
+                } else {
+                    buildCallersTree(project, method, depth, 0)
+                }
+                result { add("tree", tree) }
             }
+        } catch (e: Exception) {
+            error("Call hierarchy failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
 
-            result { add("tree", tree) }
+    private fun safeLineNumber(project: Project, method: PsiMethod): Int {
+        return try {
+            val doc = method.containingFile?.let { PsiDocumentManager.getInstance(project).getDocument(it) }
+            val offset = method.textOffset
+            if (doc != null && offset in 0..doc.textLength) doc.getLineNumber(offset) + 1 else 0
+        } catch (_: Exception) { 0 }
+    }
+
+    private fun methodToNode(project: Project, method: PsiMethod): JsonObject {
+        return JsonObject().apply {
+            addProperty("name", "${method.containingClass?.name ?: ""}.${method.name}")
+            val vf = method.containingFile?.virtualFile
+            addProperty("filePath", if (vf != null) PsiUtils.relativePath(project, vf) else "")
+            addProperty("line", safeLineNumber(project, method))
         }
     }
 
     private fun buildCallersTree(project: Project, method: PsiMethod, maxDepth: Int, currentDepth: Int): JsonObject {
-        val node = JsonObject().apply {
-            addProperty("name", "${method.containingClass?.name ?: ""}.${method.name}")
-            val vf = method.containingFile?.virtualFile
-            addProperty("filePath", if (vf != null) PsiUtils.relativePath(project, vf) else "")
-            val doc = PsiDocumentManager.getInstance(project).getDocument(method.containingFile)
-            addProperty("line", if (doc != null) doc.getLineNumber(method.textOffset) + 1 else 0)
-        }
+        val node = methodToNode(project, method)
 
         if (currentDepth >= maxDepth) {
             node.add("children", JsonArray())
@@ -84,24 +98,20 @@ class CallHierarchyTool : McpTool {
 
         val children = JsonArray()
         val scope = GlobalSearchScope.projectScope(project)
-        MethodReferencesSearch.search(method, scope, true).forEach { ref ->
-            val callerMethod = PsiTreeUtil.getParentOfType(ref.element, PsiMethod::class.java)
-            if (callerMethod != null && callerMethod != method) {
-                children.add(buildCallersTree(project, callerMethod, maxDepth, currentDepth + 1))
+        try {
+            MethodReferencesSearch.search(method, scope, true).forEach { ref ->
+                val callerMethod = PsiTreeUtil.getParentOfType(ref.element, PsiMethod::class.java)
+                if (callerMethod != null && callerMethod != method) {
+                    children.add(buildCallersTree(project, callerMethod, maxDepth, currentDepth + 1))
+                }
             }
-        }
+        } catch (_: Exception) {}
         node.add("children", children)
         return node
     }
 
     private fun buildCalleesTree(project: Project, method: PsiMethod, maxDepth: Int, currentDepth: Int): JsonObject {
-        val node = JsonObject().apply {
-            addProperty("name", "${method.containingClass?.name ?: ""}.${method.name}")
-            val vf = method.containingFile?.virtualFile
-            addProperty("filePath", if (vf != null) PsiUtils.relativePath(project, vf) else "")
-            val doc = PsiDocumentManager.getInstance(project).getDocument(method.containingFile)
-            addProperty("line", if (doc != null) doc.getLineNumber(method.textOffset) + 1 else 0)
-        }
+        val node = methodToNode(project, method)
 
         if (currentDepth >= maxDepth) {
             node.add("children", JsonArray())
@@ -109,19 +119,20 @@ class CallHierarchyTool : McpTool {
         }
 
         val children = JsonArray()
-        val callExpressions = PsiTreeUtil.findChildrenOfType(method, PsiMethodCallExpression::class.java)
-        val visited = mutableSetOf<PsiMethod>()
-        for (call in callExpressions) {
-            val resolved = call.resolveMethod() ?: continue
-            if (resolved in visited || resolved == method) continue
-            // Only include project methods, not library methods
-            if (resolved.containingFile?.virtualFile?.let {
-                    GlobalSearchScope.projectScope(project).contains(it)
-                } == true) {
-                visited.add(resolved)
-                children.add(buildCalleesTree(project, resolved, maxDepth, currentDepth + 1))
+        try {
+            val callExpressions = PsiTreeUtil.findChildrenOfType(method, PsiMethodCallExpression::class.java)
+            val visited = mutableSetOf<PsiMethod>()
+            for (call in callExpressions) {
+                val resolved = try { call.resolveMethod() } catch (_: Exception) { null } ?: continue
+                if (resolved in visited || resolved == method) continue
+                if (resolved.containingFile?.virtualFile?.let {
+                        GlobalSearchScope.projectScope(project).contains(it)
+                    } == true) {
+                    visited.add(resolved)
+                    children.add(buildCalleesTree(project, resolved, maxDepth, currentDepth + 1))
+                }
             }
-        }
+        } catch (_: Exception) {}
         node.add("children", children)
         return node
     }

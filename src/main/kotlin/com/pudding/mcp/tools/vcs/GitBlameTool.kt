@@ -8,6 +8,8 @@ import com.pudding.mcp.util.SchemaUtils.result
 import com.pudding.mcp.util.SchemaUtils.string
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.intellij.openapi.progress.EmptyProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.annotate.FileAnnotation
 import com.intellij.openapi.vcs.annotate.LineAnnotationAspect
@@ -45,19 +47,25 @@ class GitBlameTool : McpTool {
         val annotationProvider = gitVcs.annotationProvider
 
         return try {
-            val annotation: FileAnnotation = annotationProvider.annotate(virtualFile)
-            val lineCount = annotation.lineCount
+            // Git annotation API requires a ProgressIndicator in the thread context
+            var annotation: FileAnnotation? = null
+            ProgressManager.getInstance().runProcess(
+                { annotation = annotationProvider.annotate(virtualFile) },
+                EmptyProgressIndicator()
+            )
+            val ann = annotation ?: return error("Git blame returned no annotation")
+
+            val lineCount = ann.lineCount
             val actualEnd = endLine ?: lineCount
             val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
 
-            // Find AUTHOR and DATE aspects
-            val aspects = annotation.aspects
+            val aspects = ann.aspects
             val authorAspect = aspects.find { it.id == LineAnnotationAspect.AUTHOR }
 
             val blame = JsonArray()
             for (lineIdx in (startLine - 1) until actualEnd.coerceAtMost(lineCount)) {
-                val revisionNumber = annotation.getLineRevisionNumber(lineIdx)
-                val date = annotation.getLineDate(lineIdx)
+                val revisionNumber = ann.getLineRevisionNumber(lineIdx)
+                val date = ann.getLineDate(lineIdx)
                 val author = authorAspect?.getValue(lineIdx) ?: ""
 
                 blame.add(JsonObject().apply {
@@ -69,7 +77,7 @@ class GitBlameTool : McpTool {
             }
 
             @Suppress("DEPRECATION")
-            annotation.dispose()
+            ann.dispose()
             result { add("blame", blame) }
         } catch (e: Exception) {
             error("Git blame failed: ${e.message}")
